@@ -1,6 +1,7 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Serialization;
+using Random = UnityEngine.Random;
 
 /// <summary>
 /// A component that allows a GameObject's mesh to be shattered into multiple pieces.
@@ -16,23 +17,42 @@ public class Destructible : MonoBehaviour {
     /// The number of times the mesh should be recursively cut. More cascades result in more, smaller pieces.
     /// </summary>
     [Tooltip("The number of times the mesh should be recursively cut. More cascades result in more, smaller pieces.")]
-    [FormerlySerializedAs("CutCascades")] public int cutCascades = 1;
+    public int cutCascades = 1;
     
     /// <summary>
     /// The force applied to the center of each new piece, pushing it away from the original object's position.
     /// </summary>
     [Tooltip("The force applied to the center of each new piece, pushing it away from the original object's position.")]
-    [FormerlySerializedAs("ExplodeForce")] public float explodeForce = 0;
+    public float explodeForce = 0;
+
+    [Tooltip("The minimal volume of a piece required for it to be spawned.")]
+    public float minPieceVolume = 0.05f;
     
+    [Tooltip("The minimal impulse on this object so that it shatters.")]
+    public float minShatterImpulse = 15f;
+    
+    [Tooltip("Auto destroy parts after a certain amount of time.")]
+    public bool autoDestroyParts = false;
+
+    private MeshFilter _meshFilter;
+    private MeshRenderer _meshRenderer;
+    private Rigidbody _rigidbody;
+
     private bool _edgeSet = false;
     private Vector3 _edgeVertex = Vector3.zero;
     private Vector2 _edgeUV = Vector2.zero;
     private Plane _edgePlane = new Plane();
-    
-    private void Update() {
-        if (Input.GetMouseButtonDown(0)) {
-            // Debug.Log(GetComponent<MeshFilter>().mesh.GetVolume());
-            DestroyMesh();
+
+    private void Awake() {
+        _meshFilter = GetComponent<MeshFilter>();
+        _meshRenderer = GetComponent<MeshRenderer>();
+        _rigidbody = GetComponent<Rigidbody>();
+    }
+
+    private void OnCollisionEnter(Collision other) {
+        Debug.Log(other.impulse.sqrMagnitude);
+        if (other.impulse.sqrMagnitude > minPieceVolume * minPieceVolume) {
+            Shatter(other.impulse);
         }
     }
 
@@ -40,8 +60,8 @@ public class Destructible : MonoBehaviour {
     /// Initiates the mesh destruction process. This method will slice the original mesh into smaller parts
     /// based on the cutCascades and then create new GameObjects for each part.
     /// </summary>
-    private void DestroyMesh() {
-        var originalMesh = GetComponent<MeshFilter>().mesh;
+    public void Shatter(Vector3 impulse) {
+        var originalMesh = _meshFilter.mesh;
         originalMesh.RecalculateBounds();
 
         var mainPart = new PartMesh() {
@@ -61,8 +81,8 @@ public class Destructible : MonoBehaviour {
         
         // Recursively cut the mesh for each cascade level.
         for (var c = 0; c < cutCascades; c++) {
-            for (var i = 0; i < parts.Count; i++) {
-                var bounds = parts[i].Bounds;
+            foreach (var part in parts) {
+                var bounds = part.Bounds;
                 bounds.Expand(0.5f);
                 
                 // Create a random cutting plane within the bounds of the mesh part.
@@ -72,18 +92,23 @@ public class Destructible : MonoBehaviour {
                     Random.Range(bounds.min.z, bounds.max.z)));
 
                 // Generate two new meshes, one for each side of the cutting plane.
-                subParts.Add(GenerateMesh(parts[i], plane, true));
-                subParts.Add(GenerateMesh(parts[i], plane, false));
+                subParts.Add(GenerateMesh(part, plane, true));
+                subParts.Add(GenerateMesh(part, plane, false));
             }
             parts = new List<PartMesh>(subParts);
             subParts.Clear();
         }
 
         // Create GameObjects for each of the final mesh parts.
-        for (var i = 0; i < parts.Count; i++) {
-            parts[i].MakeGameObject(this);
-            parts[i].GameObject.GetComponent<Rigidbody>()
-                .AddForceAtPosition(parts[i].Bounds.center * explodeForce, transform.position);
+        foreach (var part in parts) {
+            GameObject newGameObject = part.CreateDestructibleObject(this);
+            if (newGameObject == null) {
+                continue;
+            }
+
+            var multiplier = 0.1f;
+            newGameObject.GetComponent<Rigidbody>()
+                .AddForceAtPosition(impulse * multiplier, transform.position, ForceMode.Force);
         }
 
         Destroy(gameObject);
@@ -257,7 +282,6 @@ public class Destructible : MonoBehaviour {
         public Vector3[] Normals;
         public int[][] Triangles;
         public Vector2[] UV;
-        public GameObject GameObject;
         public Bounds Bounds;
 
         /// <summary>
@@ -306,17 +330,9 @@ public class Destructible : MonoBehaviour {
         /// Creates a new GameObject from the mesh data.
         /// </summary>
         /// <param name="original">The original Destructible object, used for position, rotation, and material.</param>
-        public void MakeGameObject(Destructible original) {
-            GameObject = new GameObject(original.name) {
-                transform = {
-                    position = original.transform.position,
-                    rotation = original.transform.rotation,
-                    localScale = original.transform.localScale
-                }
-            };
-
+        public GameObject CreateDestructibleObject(Destructible original) {
             var mesh = new Mesh {
-                name = original.GetComponent<MeshFilter>().mesh.name,
+                name = original._meshFilter.mesh.name,
                 vertices = Vertices,
                 normals = Normals,
                 uv = UV
@@ -326,24 +342,43 @@ public class Destructible : MonoBehaviour {
                 mesh.SetTriangles(Triangles[i], i, true);
 
             Bounds = mesh.bounds;
-            
-            var renderer = GameObject.AddComponent<MeshRenderer>();
-            renderer.materials = original.GetComponent<MeshRenderer>().materials;
 
-            var filter = GameObject.AddComponent<MeshFilter>();
+            var originalVolume = original._meshFilter.mesh.GetVolume();
+            var pieceVolume = mesh.GetVolume();
+            if (pieceVolume < original.minPieceVolume) {
+                return null;
+            }
+
+            GameObject newGameObject = new GameObject(original.name) {
+                transform = {
+                    position = original.transform.position,
+                    rotation = original.transform.rotation,
+                    localScale = original.transform.localScale
+                }
+            };
+            
+            var renderer = newGameObject.AddComponent<MeshRenderer>();
+            renderer.materials = original._meshRenderer.materials;
+
+            var filter = newGameObject.AddComponent<MeshFilter>();
             filter.mesh = mesh;
 
-            var collider = GameObject.AddComponent<MeshCollider>();
-            collider.convex = true;
+            // var collider = newGameObject.AddComponent<MeshCollider>();
+            // collider.convex = true;
+            
+            var collider = newGameObject.AddComponent<BoxCollider>();
+            collider.center = mesh.bounds.center;
+            collider.size = mesh.bounds.size;
+            
+            var rigidbody = newGameObject.AddComponent<Rigidbody>();
+            rigidbody.mass = original._rigidbody.mass * (pieceVolume / originalVolume);
 
-            GameObject.AddComponent<Rigidbody>();
-
-            // If the new mesh part is large enough, allow it to be destructible as well.
-            if (mesh.GetVolume() >= 0.2f) {
-                var meshDestroy = GameObject.AddComponent<Destructible>();
-                meshDestroy.cutCascades = original.cutCascades;
-                meshDestroy.explodeForce = original.explodeForce;
+            if (original.autoDestroyParts) {
+                var autoDestroy = newGameObject.AddComponent<AutoDestroy>();
+                autoDestroy.destroyAfterSeconds = 3;
             }
+
+            return newGameObject;
         }
     }
 }
