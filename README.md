@@ -1,5 +1,7 @@
 # POC Object Shatter
 
+![recording](https://raw.githubusercontent.com/yanicksenn/Unity-POC-ObjectShatter/9df114019419b42c5506d68e2983f407126fc1a6/Img/recording.gif)
+
 Proof of concept of shattering objects procedurally.
 
 ## Basic Idea
