@@ -1,3 +1,7 @@
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.Serialization;
+
 /// <summary>
 /// A component that allows a GameObject's mesh to be shattered into multiple pieces.
 /// This script requires a MeshFilter, MeshRenderer, and Rigidbody to be attached to the same GameObject.
@@ -48,8 +52,9 @@ public class Destructible : MonoBehaviour {
             Bounds = originalMesh.bounds
         };
 
-        for (var i = 0; i < originalMesh.subMeshCount; i++)
+        for (var i = 0; i < originalMesh.subMeshCount; i++) {
             mainPart.Triangles[i] = originalMesh.GetTriangles(i);
+        }
 
         var parts = new List<PartMesh> { mainPart };
         var subParts = new List<PartMesh>();
@@ -292,8 +297,9 @@ public class Destructible : MonoBehaviour {
             Normals = _normals.ToArray();
             UV = _uVs.ToArray();
             Triangles = new int[_triangles.Count][];
-            for (var i = 0; i < _triangles.Count; i++)
+            for (var i = 0; i < _triangles.Count; i++) {
                 Triangles[i] = _triangles[i].ToArray();
+            }
         }
 
         /// <summary>
